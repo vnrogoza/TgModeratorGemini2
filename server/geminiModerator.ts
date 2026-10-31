@@ -165,79 +165,59 @@ ${userHistorySummary ? `Контекст пользователя: ${userHistory
 - explanation: краткое емкое объяснение на русском языке (до 15 слов) почему выставлена такая оценка
 - action: 'allow' | 'warn' | 'delete' | 'mute_temp' | 'ban'`;
 
-    const schemaConfig = {
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          score: { type: Type.INTEGER, description: 'Score strictly from -5 to 5' },
-          sentiment: {
-            type: Type.STRING,
-            description: 'One of: positive, neutral, negative, aggressive, constructive',
-          },
-          profanityDetected: { type: Type.BOOLEAN },
-          profanityWords: {
-            type: Type.ARRAY,
-            items: { type: Type.STRING },
-          },
-          toxicityScore: { type: Type.NUMBER },
-          categories: {
-            type: Type.ARRAY,
-            items: { type: Type.STRING },
-          },
-          explanation: { type: Type.STRING },
-          action: {
-            type: Type.STRING,
-            description: 'One of: allow, warn, delete, mute_temp, ban',
+    // Call Gemini with a 3.5-second timeout to prevent UI hang
+    const timeoutPromise = new Promise<null>((resolve) =>
+      setTimeout(() => resolve(null), 3500)
+    );
+
+    const apiCallPromise = client.models
+      .generateContent({
+        model: 'gemini-3.8-flash',
+        contents: prompt,
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              score: { type: Type.INTEGER, description: 'Score strictly from -5 to 5' },
+              sentiment: {
+                type: Type.STRING,
+                description: 'One of: positive, neutral, negative, aggressive, constructive',
+              },
+              profanityDetected: { type: Type.BOOLEAN },
+              profanityWords: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
+              },
+              toxicityScore: { type: Type.NUMBER },
+              categories: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
+              },
+              explanation: { type: Type.STRING },
+              action: {
+                type: Type.STRING,
+                description: 'One of: allow, warn, delete, mute_temp, ban',
+              },
+            },
+            required: [
+              'score',
+              'sentiment',
+              'profanityDetected',
+              'toxicityScore',
+              'categories',
+              'explanation',
+              'action',
+            ],
           },
         },
-        required: [
-          'score',
-          'sentiment',
-          'profanityDetected',
-          'toxicityScore',
-          'categories',
-          'explanation',
-          'action',
-        ],
-      },
-    };
+      })
+      .catch((err) => {
+        console.warn('Gemini API call failed, using rule-based fallback:', err?.message || err);
+        return null;
+      });
 
-    // Helper to call Gemini with timeout
-    const callModelWithTimeout = async (modelName: string, timeoutMs: number = 3500) => {
-      try {
-        const callPromise = client.models.generateContent({
-          model: modelName,
-          contents: prompt,
-          config: schemaConfig,
-        });
-
-        const timeoutPromise = new Promise<null>((resolve) =>
-          setTimeout(() => resolve(null), timeoutMs)
-        );
-
-        return await Promise.race([callPromise, timeoutPromise]);
-      } catch (err: any) {
-        return { error: err };
-      }
-    };
-
-    // 1. Try primary model: gemini-3.8-flash
-    let response: any = await callModelWithTimeout('gemini-3.8-flash', 3500);
-
-    // 2. If primary model returned error (e.g. 503 high demand), try secondary model: gemini-3.1-flash-lite
-    if (!response || response.error || !response.text) {
-      const errMessage = response?.error?.message || (response ? 'empty response' : 'timeout');
-      console.warn(`Primary model gemini-3.8-flash unavailable (${errMessage}), trying backup model gemini-3.1-flash-lite...`);
-      
-      response = await callModelWithTimeout('gemini-3.1-flash-lite', 3000);
-      
-      if (!response || response.error || !response.text) {
-        const backupErr = response?.error?.message || (response ? 'empty response' : 'timeout');
-        console.warn(`Backup model also unavailable (${backupErr}), applying rule-based fallback.`);
-        return fallback;
-      }
-    }
+    const response = (await Promise.race([apiCallPromise, timeoutPromise])) as any;
     if (!response || !response.text) {
       return fallback;
     }
